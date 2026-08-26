@@ -649,295 +649,384 @@
     </div>
 
     <!-- ===== MAIN SCRIPT ===== -->
-<script>
-    let activeQuery = "asian"; 
-    let idxHome = Math.floor(Math.random() * 5) + 1; 
-    let idxRelated = Math.floor(Math.random() * 5) + 6;
-    let lockScrollFetch = false;
-    let currentPanel = "home"; 
-    let activeVideoId = null;
+    <script>
+        // ============================================================
+        //  CONFIG
+        // ============================================================
+        const AGE_KEY = "srrsorgyi_age_verified_v1";
+        const FAV_KEY = "srrsorgyi_favorites_v1";
 
-    if (!sessionStorage.getItem('processedKeys')) sessionStorage.setItem('processedKeys', JSON.stringify([]));
-    if (!localStorage.getItem('savedCollection')) localStorage.setItem('savedCollection', JSON.stringify([]));
+        // ============================================================
+        //  STATE
+        // ============================================================
+        let activeQuery = "asian";
+        let idxHome = Math.floor(Math.random() * 5) + 1;
+        let idxRelated = Math.floor(Math.random() * 5) + 6;
+        let lockScrollFetch = false;
+        let currentPanel = "home";
+        let activeVideoId = null;
 
-    document.addEventListener("DOMContentLoaded", () => {
-        checkUrlHashForVideo();
+        // ============================================================
+        //  INIT
+        // ============================================================
+        if (!sessionStorage.getItem('processedKeys')) {
+            sessionStorage.setItem('processedKeys', JSON.stringify([]));
+        }
+        if (!localStorage.getItem(FAV_KEY)) {
+            localStorage.setItem(FAV_KEY, JSON.stringify([]));
+        }
 
-        if (!activeVideoId) {
+        document.addEventListener("DOMContentLoaded", () => {
+            // Check age
+            if (localStorage.getItem(AGE_KEY) === "true") {
+                document.getElementById("ageOverlay").style.display = "none";
+                document.getElementById("app").style.display = "block";
+            }
+
+            // Check URL hash for direct video link
+            checkUrlHashForVideo();
+
+            // If no video loaded from hash, load home
+            if (!activeVideoId) {
+                executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
+            }
+
+            // Update favorite badge
+            updateFavoriteBadge();
+
+            // Search
+            document.getElementById('queryInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    activeQuery = this.value.trim() || "asian";
+                    idxHome = Math.floor(Math.random() * 5) + 1;
+                    executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
+                    this.blur();
+                }
+            });
+
+            // Infinite scroll
+            window.addEventListener('scroll', () => {
+                if (currentPanel === "favorites") return;
+                const threshold = 700;
+                if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - threshold) {
+                    if (!lockScrollFetch) {
+                        lockScrollFetch = true;
+                        if (currentPanel === "home") {
+                            idxHome++;
+                            executeFetchOperation(activeQuery, idxHome, 'homeStream', true);
+                        } else if (currentPanel === "player") {
+                            idxRelated++;
+                            executeFetchOperation(activeQuery, idxRelated, 'recommendStream', true);
+                        }
+                    }
+                }
+            });
+        });
+
+        // ============================================================
+        //  AGE VERIFICATION
+        // ============================================================
+        function agreeAge() {
+            localStorage.setItem(AGE_KEY, "true");
+            document.getElementById("ageOverlay").style.display = "none";
+            document.getElementById("app").style.display = "block";
+            if (!activeVideoId) {
+                executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
+            }
+        }
+
+        function declineAge() {
+            document.querySelector(".age-card p").textContent = "ဝင်ရောက်ခွင့် ငြင်းပယ်ထားပါသည်။";
+        }
+
+        // ============================================================
+        //  TOAST
+        // ============================================================
+        function showToast(text) {
+            const toast = document.getElementById('toastBox');
+            toast.innerText = text;
+            toast.classList.add('show');
+            clearTimeout(toast._timer);
+            toast._timer = setTimeout(() => toast.classList.remove('show'), 2500);
+        }
+
+        // ============================================================
+        //  COPY LINK
+        // ============================================================
+        function copyVideoLink(e, videoId) {
+            if (e) e.stopPropagation();
+            const shareableUrl = `${window.location.origin}${window.location.pathname}#video/${videoId}`;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(shareableUrl).then(() => {
+                    showToast("🔗 လင့်ခ်ကို ကူးယူပြီးပါပြီ!");
+                });
+            } else {
+                const input = document.createElement('input');
+                input.value = shareableUrl;
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                document.body.removeChild(input);
+                showToast("🔗 လင့်ခ်ကို ကူးယူပြီးပါပြီ!");
+            }
+        }
+
+        // ============================================================
+        //  URL HASH ROUTING
+        // ============================================================
+        async function checkUrlHashForVideo() {
+            const hash = window.location.hash;
+            if (hash.startsWith('#video/')) {
+                const vId = hash.replace('#video/', '');
+                if (vId) {
+                    try {
+                        const response = await fetch(`https://www.eporner.com/api/v2/video/id/?id=${vId}`);
+                        const data = await response.json();
+                        if (data && data.embed) {
+                            activateBroadcastStream(data.embed, data.title, data.id);
+                        }
+                    } catch (err) {
+                        console.error("Direct link load error:", err);
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        //  NAVIGATION
+        // ============================================================
+        function navigateView(panelId) {
+            currentPanel = panelId;
+            document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.dock-item-lux').forEach(d => d.classList.remove('active'));
+
+            if (panelId === 'home') {
+                document.getElementById('panelHome').classList.add('active');
+                document.getElementById('dockHome').classList.add('active');
+                document.getElementById('videoEmbedContainer').innerHTML = "";
+                history.pushState("", document.title, window.location.pathname + window.location.search);
+            } else if (panelId === 'favorites') {
+                document.getElementById('panelFavs').classList.add('active');
+                document.getElementById('dockFav').classList.add('active');
+                document.getElementById('videoEmbedContainer').innerHTML = "";
+                renderFavorites();
+                history.pushState("", document.title, window.location.pathname + window.location.search);
+            } else if (panelId === 'player') {
+                document.getElementById('panelPlayer').classList.add('active');
+            }
+            window.scrollTo(0, 0);
+        }
+
+        // ============================================================
+        //  FAVORITES - WITH AD GATE
+        // ============================================================
+        function triggerFavSecureTransition() {
+            if (currentPanel === 'favorites') return;
+
+            const gate = document.getElementById('adPortalModal');
+            const frame = document.getElementById('interstitialFrame');
+            const timer = document.getElementById('timerCountdown');
+
+            frame.src = "https://www.effectivecpmnetwork.com/u545szx1tk?key=25e82d325bbd125da4758a5a8bdb35c4";
+            gate.style.display = 'flex';
+
+            let sec = 10;
+            timer.innerText = `လုံခြုံရေး စစ်ဆေးနေသည်... ${sec}s`;
+
+            const interval = setInterval(() => {
+                sec--;
+                if (sec <= 0) {
+                    clearInterval(interval);
+                    gate.style.display = 'none';
+                    frame.src = "";
+                    navigateView('favorites');
+                } else {
+                    timer.innerText = `လုံခြုံရေး စစ်ဆေးနေသည်... ${sec}s`;
+                }
+            }, 1000);
+        }
+
+        // ============================================================
+        //  CATEGORY FILTER
+        // ============================================================
+        function filterQuery(queryKeyword, component) {
+            document.querySelectorAll('.pill-lux').forEach(c => c.classList.remove('active'));
+            component.classList.add('active');
+            activeQuery = queryKeyword;
+            idxHome = Math.floor(Math.random() * 5) + 1;
             executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
         }
 
-        document.getElementById('queryInput').addEventListener('keypress', function (e) {
-            if (e.key === 'Enter') {
-                activeQuery = this.value.trim() || "asian";
-                idxHome = Math.floor(Math.random() * 5) + 1;
-                executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
-                this.blur();
+        // ============================================================
+        //  FAVORITES - TOGGLE & RENDER
+        // ============================================================
+        function toggleCollectionState(e, packet) {
+            e.stopPropagation();
+            let store = JSON.parse(localStorage.getItem(FAV_KEY));
+            const idx = store.findIndex(item => item.id === packet.id);
+
+            if (idx > -1) {
+                store.splice(idx, 1);
+                e.currentTarget.classList.remove('active');
+                e.currentTarget.innerHTML = '♡';
+                showToast("⭐ သိမ်းထားမှုမှ ဖယ်ရှားပြီးပါပြီ");
+            } else {
+                store.push(packet);
+                e.currentTarget.classList.add('active');
+                e.currentTarget.innerHTML = '❤️';
+                showToast("❤️ သိမ်းထားမှုသို့ ထည့်သွင်းပြီးပါပြီ");
             }
-        }); 
+            localStorage.setItem(FAV_KEY, JSON.stringify(store));
+            updateFavoriteBadge();
 
-        window.addEventListener('scroll', () => {
-            if (currentPanel === "favorites") return;
-            if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight - 700) {
-                if (!lockScrollFetch) {
-                    lockScrollFetch = true; 
-                    if (currentPanel === "home") {
-                        idxHome++;
-                        executeFetchOperation(activeQuery, idxHome, 'homeStream', true);
-                    } else if (currentPanel === "player") {
-                        idxRelated++;
-                        executeFetchOperation(activeQuery, idxRelated, 'recommendStream', true);
-                    }
-                }
+            if (currentPanel === "favorites") renderFavorites();
+        }
+
+        function renderFavorites() {
+            const board = document.getElementById('bookmarksStream');
+            let store = JSON.parse(localStorage.getItem(FAV_KEY));
+
+            if (store.length === 0) {
+                board.innerHTML = `<div class="lux-state-msg">⭐ သိမ်းထားသော ဗီဒီယိုများ မရှိသေးပါ။<br>ဗီဒီယိုပေါ်ရှိ နှလုံးသင်္ကေတကို နှိပ်၍ သိမ်းဆည်းပါ။</div>`;
+                return;
             }
-        });
-    }); 
 
-    function showToast(text) {
-        const toast = document.getElementById('toastBox');
-        toast.innerText = text;
-        toast.classList.add('show');
-        setTimeout(() => toast.classList.remove('show'), 2500);
-    }
-
-    function copyVideoLink(e, videoId) {
-        if(e) e.stopPropagation();
-        const baseDomain = window.location.origin + window.location.pathname;
-        const shareableUrl = `${baseDomain}#video/${videoId}`;
-        
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(shareableUrl).then(() => {
-                showToast("🔗 Link ကူးယူပြီးပါပြီ!");
+            board.innerHTML = "";
+            store.forEach(vData => {
+                board.appendChild(createCardElement(vData, true));
             });
-        } else {
-            const input = document.createElement('input');
-            input.value = shareableUrl;
-            document.body.appendChild(input);
-            input.select();
-            document.execCommand('copy');
-            document.body.removeChild(input);
-            showToast("🔗 Link ကူးယူပြီးပါပြီ!");
         }
-    }
 
-    async function checkUrlHashForVideo() {
-        const hash = window.location.hash;
-        if (hash.startsWith('#video/')) {
-            const vId = hash.replace('#video/', '');
-            if (vId) {
-                try {
-                    const response = await fetch(`https://www.eporner.com/api/v2/video/id/?id=${vId}`);
-                    const data = await response.json();
-                    if (data && data.embed) {
-                        activateBroadcastStream(data.embed, data.title, data.id);
-                    }
-                } catch(err) {
-                    console.error("Direct link load error:", err);
-                }
+        function updateFavoriteBadge() {
+            const store = JSON.parse(localStorage.getItem(FAV_KEY));
+            const badge = document.getElementById('favBadge');
+            badge.textContent = store.length;
+            badge.classList.toggle('show', store.length > 0);
+        }
+
+        // ============================================================
+        //  API FETCH
+        // ============================================================
+        async function executeFetchOperation(searchKey, page, targetId, isAppend) {
+            const stream = document.getElementById(targetId);
+
+            if (!isAppend) {
+                stream.innerHTML = `<div class="lux-state-msg"><div class="lux-spinner"></div>ဗီဒီယိုများ ရှာဖွေနေသည်...</div>`;
             }
-        }
-    }
 
-    function navigateView(panelId) {
-        currentPanel = panelId;
-        document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
-        document.querySelectorAll('.dock-item-lux').forEach(d => d.classList.remove('active'));
+            try {
+                const url = `https://www.eporner.com/api/v2/video/search/?query=${encodeURIComponent(searchKey)}&per_page=15&page=${page}&thumbsize=big`;
+                const res = await fetch(url);
+                const data = await res.json();
 
-        if (panelId === 'home') {
-            document.getElementById('panelHome').classList.add('active');
-            document.getElementById('dockHome').classList.add('active');
-            document.getElementById('videoEmbedContainer').innerHTML = ""; 
-            history.pushState("", document.title, window.location.pathname + window.location.search);
-        } else if (panelId === 'favorites') {
-            document.getElementById('panelFavs').classList.add('active');
-            document.getElementById('dockFav').classList.add('active');
-            document.getElementById('videoEmbedContainer').innerHTML = ""; 
-            parseSavedData();
-            history.pushState("", document.title, window.location.pathname + window.location.search);
-        } else if (panelId === 'player') {
-            document.getElementById('panelPlayer').classList.add('active');
-        }
-        window.scrollTo(0, 0);
-    }
+                if (!isAppend) stream.innerHTML = "";
 
-    function triggerFavSecureTransition() {
-        if (currentPanel === 'favorites') return;
-        
-        const gate = document.getElementById('adPortalModal');
-        const frame = document.getElementById('interstitialFrame');
-        const timer = document.getElementById('timerCountdown');
-        
-        frame.src = "https://www.effectivecpmnetwork.com/u545szx1tk?key=25e82d325bbd125da4758a5a8bdb35c4";
-        gate.style.display = 'flex';
-        
-        let dynamicSec = 10;
-        timer.innerText = `Verifying secure link in ${dynamicSec}s...`;
+                let processedKeys = JSON.parse(sessionStorage.getItem('processedKeys'));
+                let store = JSON.parse(localStorage.getItem(FAV_KEY));
+                let newCount = 0;
 
-        const pulse = setInterval(() => {
-            dynamicSec--;
-            if (dynamicSec <= 0) {
-                clearInterval(pulse);
-                gate.style.display = 'none';
-                frame.src = ""; 
-                navigateView('favorites');
-            } else {
-                timer.innerText = `Verifying secure link in ${dynamicSec}s...`;
-            }
-        }, 1000);
-    }
+                if (data.videos && data.videos.length > 0) {
+                    data.videos.forEach(item => {
+                        if (!processedKeys.includes(item.id)) {
+                            processedKeys.push(item.id);
+                            newCount++;
 
-    function filterQuery(queryKeyword, component) {
-        document.querySelectorAll('.pill-lux').forEach(c => c.classList.remove('active'));
-        component.classList.add('active');
-        activeQuery = queryKeyword;
-        idxHome = Math.floor(Math.random() * 5) + 1;
-        executeFetchOperation(activeQuery, idxHome, 'homeStream', false);
-    }
+                            const views = item.views || Math.floor(Math.random() * 600) + 50;
+                            const viewsStr = views >= 1000 ? (views / 1000).toFixed(1) + 'K' : views;
+                            const duration = `${item.length_min}:${item.length_sec < 10 ? '0' + item.length_sec : item.length_sec}`;
 
-    function toggleCollectionState(e, packet) {
-        e.stopPropagation(); 
-        let store = JSON.parse(localStorage.getItem('savedCollection'));
-        const targetIdx = store.findIndex(item => item.id === packet.id);
+                            const videoData = {
+                                id: item.id,
+                                title: item.title.replace(/'/g, "\\'").replace(/"/g, '\\"'),
+                                embed: item.embed,
+                                thumb: item.default_thumb.src,
+                                duration: duration,
+                                views: viewsStr
+                            };
 
-        if (targetIdx > -1) {
-            store.splice(targetIdx, 1);
-            e.currentTarget.classList.remove('active');
-            e.currentTarget.innerHTML = '♡';
-        } else {
-            store.push(packet);
-            e.currentTarget.classList.add('active');
-            e.currentTarget.innerHTML = '❤️';
-        }
-        localStorage.setItem('savedCollection', JSON.stringify(store));
+                            const isFav = store.some(s => s.id === item.id);
+                            stream.appendChild(createCardElement(videoData, isFav));
+                        }
+                    });
 
-        if (currentPanel === "favorites") parseSavedData();
-    }
+                    sessionStorage.setItem('processedKeys', JSON.stringify(processedKeys));
 
-    function parseSavedData() {
-        const board = document.getElementById('bookmarksStream');
-        let store = JSON.parse(localStorage.getItem('savedCollection'));
-
-        if (store.length === 0) {
-            board.innerHTML = `<div class="lux-state-msg">No bookmarks discovered.<br>Click heart icon to save videos.</div>`;
-            return;
-        }
-
-        board.innerHTML = "";
-        store.forEach(vData => {
-            board.appendChild(scaffoldCardNode(vData, true));
-        });
-    }
-
-    async function executeFetchOperation(searchKey, dynamicPage, TargetNodeId, isAppendation) {
-        const stream = document.getElementById(TargetNodeId);
-        
-        if (!isAppendation) {
-            stream.innerHTML = `<div class="lux-state-msg"><div class="lux-spinner"></div>Loading BURMA LADY collection...</div>`;
-        }
-
-        try {
-            const apiRequestString = `https://www.eporner.com/api/v2/video/search/?query=${encodeURIComponent(searchKey)}&per_page=15&page=${dynamicPage}&thumbsize=big`;
-            const communicationChannel = await fetch(apiRequestString);
-            const verifiedPayload = await communicationChannel.json(); 
-
-            if (!isAppendation) stream.innerHTML = ""; 
-
-            let processedKeys = JSON.parse(sessionStorage.getItem('processedKeys')); 
-            let store = JSON.parse(localStorage.getItem('savedCollection'));
-            let operationalYieldCount = 0;
-
-            if (verifiedPayload.videos && verifiedPayload.videos.length > 0) {
-                verifiedPayload.videos.forEach(entity => {
-                    if (!processedKeys.includes(entity.id)) {
-                        processedKeys.push(entity.id); 
-                        operationalYieldCount++; 
-
-                        const simulatedVisits = entity.views || Math.floor(Math.random() * 600) + 50;
-                        const shortFormMetric = simulatedVisits >= 1000 ? (simulatedVisits / 1000).toFixed(1) + 'K' : simulatedVisits; 
-                        const timestampDisplay = `${entity.length_min}:${entity.length_sec < 10 ? '0' + entity.length_sec : entity.length_sec}`;
-                        const matchingState = store.some(savedUnit => savedUnit.id === entity.id);
-
-                        const structuralObject = {
-                            id: entity.id,
-                            title: entity.title.replace(/'/g, "\\'").replace(/"/g, '\\"'),
-                            embed: entity.embed,
-                            thumb: entity.default_thumb.src,
-                            duration: timestampDisplay,
-                            views: shortFormMetric
-                        };
-
-                        stream.appendChild(scaffoldCardNode(structuralObject, matchingState));
+                    if (newCount === 0) {
+                        lockScrollFetch = false;
+                        const nextPage = page + 1;
+                        if (currentPanel === "home") {
+                            idxHome = nextPage;
+                            executeFetchOperation(activeQuery, idxHome, 'homeStream', true);
+                        } else {
+                            idxRelated = nextPage;
+                            executeFetchOperation(activeQuery, idxRelated, 'recommendStream', true);
+                        }
+                        return;
                     }
-                }); 
-
-                sessionStorage.setItem('processedKeys', JSON.stringify(processedKeys)); 
-
-                if (operationalYieldCount === 0) {
                     lockScrollFetch = false;
-                    let incrementedPageValue = dynamicPage + 1;
-                    if (currentPanel === "home") {
-                        idxHome = incrementedPageValue;
-                        executeFetchOperation(activeQuery, idxHome, 'homeStream', true);
-                    } else {
-                        idxRelated = incrementedPageValue;
-                        executeFetchOperation(activeQuery, idxRelated, 'recommendStream', true);
+                } else {
+                    if (!isAppend) {
+                        stream.innerHTML = `<div class="lux-state-msg">ဗီဒီယိုများ မတွေ့ပါ။</div>`;
                     }
-                    return;
+                    lockScrollFetch = false;
+                }
+            } catch (err) {
+                console.error("API Error:", err);
+                if (!isAppend) {
+                    stream.innerHTML = `<div class="lux-state-msg">ဗီဒီယိုများ ရယူရာတွင် အမှားရှိပါသည်။</div>`;
                 }
                 lockScrollFetch = false;
-            } else {
-                if (!isAppendation) stream.innerHTML = `<div class="lux-state-msg">No videos found.</div>`;
-                lockScrollFetch = false;
             }
-        } catch (exception) {
-            console.error(exception);
-            if (!isAppendation) stream.innerHTML = `<div class="lux-state-msg">Data stream alignment fault.</div>`;
-            lockScrollFetch = false;
         }
-    } 
 
-    function scaffoldCardNode(dataset, activeMarker) {
-        const elementWrapper = document.createElement('div');
-        elementWrapper.className = 'lux-card';
-        elementWrapper.onclick = () => activateBroadcastStream(dataset.embed, dataset.title, dataset.id); 
+        // ============================================================
+        //  CREATE CARD ELEMENT
+        // ============================================================
+        function createCardElement(data, isFav) {
+            const card = document.createElement('div');
+            card.className = 'lux-card';
+            card.onclick = () => activateBroadcastStream(data.embed, data.title, data.id);
 
-        elementWrapper.innerHTML = `
-            <div class="lux-media">
-                <img src="${dataset.thumb}" alt="Cover Graphic">
-                <div class="share-lux-trigger" onclick="copyVideoLink(event, '${dataset.id}')">
-                    <span>🔗</span> <span>Link ကူးရန်</span>
+            card.innerHTML = `
+                <div class="lux-media">
+                    <img src="${data.thumb}" alt="thumbnail" loading="lazy" onerror="this.src='https://via.placeholder.com/300x169?text=No+Image'">
+                    <div class="share-lux-trigger" onclick="copyVideoLink(event, '${data.id}')">
+                        🔗 လင့်ခ်
+                    </div>
+                    <div class="duration-lux-badge">${data.duration}</div>
+                    <div class="fav-lux-trigger ${isFav ? 'active' : ''}" onclick="toggleCollectionState(event, ${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                        ${isFav ? '❤️' : '♡'}
+                    </div>
                 </div>
-                <div class="duration-lux-badge">${dataset.duration}</div>
-                <div class="fav-lux-trigger ${activeMarker ? 'active' : ''}" onclick="toggleCollectionState(event, ${JSON.stringify(dataset).replace(/"/g, '&quot;')})">
-                    ${activeMarker ? '❤️' : '♡'}
+                <div class="lux-details">
+                    <div class="lux-title">${data.title}</div>
+                    <div class="lux-metrics">
+                        <span><span class="play-indicator">▶</span> ${data.views} Views</span>
+                        <span>HD</span>
+                    </div>
                 </div>
-            </div>
-            <div class="lux-details">
-                <div class="lux-title">${dataset.title}</div>
-                <div class="lux-metrics">
-                    <span><span class="play-indicator">▶</span> ${dataset.views} Views</span>
-                    <span>UltraHD</span>
-                </div>
-            </div>
-        `;
-        return elementWrapper;
-    }
+            `;
+            return card;
+        }
 
-    function activateBroadcastStream(streamLink, metaLabel, videoId) {
-        activeVideoId = videoId;
-        window.location.hash = `video/${videoId}`;
+        // ============================================================
+        //  ACTIVATE PLAYER
+        // ============================================================
+        function activateBroadcastStream(embedUrl, title, videoId) {
+            activeVideoId = videoId;
+            window.location.hash = `video/${videoId}`;
 
-        navigateView('player');
-        document.getElementById('videoEmbedContainer').innerHTML = `
-            <iframe src="${streamLink}" allowfullscreen scrolling="no"></iframe>
-        `;
-        document.getElementById('videoActiveTitle').innerText = metaLabel; 
-        document.getElementById('playerShareBtn').onclick = (e) => copyVideoLink(e, videoId);
+            navigateView('player');
+            document.getElementById('videoEmbedContainer').innerHTML = `
+                <iframe src="${embedUrl}" allowfullscreen scrolling="no" loading="lazy"></iframe>
+            `;
+            document.getElementById('videoActiveTitle').innerText = title;
+            document.getElementById('playerShareBtn').onclick = (e) => copyVideoLink(e, videoId);
 
-        idxRelated = Math.floor(Math.random() * 5) + 6;
-        executeFetchOperation(activeQuery, idxRelated, 'recommendStream', false);
-    } 
-</script>
+            idxRelated = Math.floor(Math.random() * 5) + 6;
+            executeFetchOperation(activeQuery, idxRelated, 'recommendStream', false);
+        }
+    </script>
 
     <!-- ============================================================
     AD SCRIPTS (Place at bottom for performance)
